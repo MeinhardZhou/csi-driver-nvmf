@@ -78,7 +78,7 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	_, err = AttachDisk(req, *diskMounter)
 	if err != nil {
 		klog.Errorf("NodePublishVolume: Attach volume %s with error: %s", req.VolumeId, err.Error())
-		return nil, err
+		return nil, status.Errorf(codes.Internal, "NodePublishVolume: failed to attach nvmf disk. %v", err)
 	}
 
 	return &csi.NodePublishVolumeResponse{}, nil
@@ -93,8 +93,8 @@ func (n *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpub
 	if req.TargetPath == "" {
 		return nil, status.Error(codes.InvalidArgument, "NodeUnpublishVolume Staging TargetPath must be provided")
 	}
-	targetPath := req.GetTargetPath()
-	err := DetachDisk(req.VolumeId, getNVMfDiskUnMounter(req), targetPath)
+
+	err := DetachDisk(req.VolumeId, getNVMfDiskUnMounter(req), req.GetTargetPath())
 	if err != nil {
 		klog.Errorf("NodeUnpublishVolume: VolumeID: %s detachDisk err: %v", req.VolumeId, err)
 		return nil, err

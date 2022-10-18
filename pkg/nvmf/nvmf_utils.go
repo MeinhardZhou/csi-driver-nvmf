@@ -31,7 +31,7 @@ import (
 	"k8s.io/klog"
 )
 
-func waitForPathToExist(devicePath string, maxRetries, intervalSeconds int, deviceTransport string) (bool, error) {
+func waitFordevicePathToExist(devicePath string, maxRetries, intervalSeconds int, deviceTransport string) (bool, error) {
 	for i := 0; i < maxRetries; i++ {
 		if deviceTransport == "tcp" {
 			exist := utils.IsFileExisting(devicePath)
@@ -42,16 +42,13 @@ func waitForPathToExist(devicePath string, maxRetries, intervalSeconds int, devi
 			return false, fmt.Errorf("connect only support tcp")
 		}
 
-		if i == maxRetries-1 {
-			break
-		}
 		time.Sleep(time.Second * time.Duration(intervalSeconds))
 	}
-	return false, fmt.Errorf("not found devicePath %s", devicePath)
+	return false, fmt.Errorf("devicePath %s didn't exist for waiting %d", devicePath, intervalSeconds*maxRetries)
 }
 
 func GetDeviceNameByVolumeID(volumeID string) (deviceName string, err error) {
-	volumeLinkPath := strings.Join([]string{"/dev/disk/by-id/nvme-uuid", volumeID}, ".")
+	volumeLinkPath := strings.Join([]string{SYS_DEV_NVMF_BASE_PATH, volumeID}, ".")
 	stat, err := os.Lstat(volumeLinkPath)
 	if err != nil {
 		if os.IsNotExist(err) {

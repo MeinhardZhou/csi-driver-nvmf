@@ -18,6 +18,8 @@ package nvmf
 const (
 	NVMF_NQN_SIZE = 223
 	SYS_NVMF      = "/sys/class/nvme"
+
+	SYS_DEV_NVMF_BASE_PATH = "/dev/disk/by-id/nvme-uuid"
 )
 
 // Here erron

@@ -27,42 +27,41 @@ import (
 	"k8s.io/klog"
 )
 
-type Connector struct {
+type nvmfConnector struct {
 	VolumeID      string
 	DeviceUUID    string
 	TargetNqn     string
 	TargetAddr    string
 	TargetPort    string
-	Transport     string
+	TransportType string
 	RetryCount    int32
 	CheckInterval int32
 }
 
-func getNvmfConnector(nvmfInfo *nvmfDiskInfo) *Connector {
-	return &Connector{
-		VolumeID:   nvmfInfo.VolName,
-		DeviceUUID: nvmfInfo.DeviceUUID,
-		TargetNqn:  nvmfInfo.Nqn,
-		TargetAddr: nvmfInfo.Addr,
-		TargetPort: nvmfInfo.Port,
-		Transport:  nvmfInfo.Transport,
+func getNvmfConnector(nvmfInfo *nvmfDiskInfo) *nvmfConnector {
+	return &nvmfConnector{
+		VolumeID:      nvmfInfo.VolName,
+		DeviceUUID:    nvmfInfo.DeviceUUID,
+		TargetNqn:     nvmfInfo.Nqn,
+		TargetAddr:    nvmfInfo.Transport.trAddr,
+		TargetPort:    nvmfInfo.Transport.trPort,
+		TransportType: nvmfInfo.Transport.trType,
 	}
 }
 
 // connector provides a struct to hold all of the needed parameters to make nvmf connection
 
-func _connect(argStr string) error {
+func _connect(nvmf_connect_args string) error {
 	file, err := os.OpenFile("/dev/nvme-fabrics", os.O_RDWR, 0666)
+	defer file.Close()
 	if err != nil {
-		klog.Errorf("Connect: open NVMf fabrics error: %v", err)
+		klog.Errorf("Connect: failed to open NVMf fabrics file. Error: %v", err)
 		return err
 	}
 
-	defer file.Close()
-
-	err = utils.WriteStringToFile(file, argStr)
+	err = utils.WriteStringToFile(file, nvmf_connect_args)
 	if err != nil {
-		klog.Errorf("Connect: write arg to connect file error: %v", err)
+		klog.Errorf("Connect: failed to write args to NVMf fabrics file. Error: %v", err)
 		return err
 	}
 	// todo: read file to verify
@@ -78,7 +77,7 @@ func _disconnect(sysfs_path string) error {
 	}
 	err = utils.WriteStringToFile(file, "1")
 	if err != nil {
-		klog.Errorf("Disconnect: write 1 to delete_controller error: %v", err)
+		klog.Errorf("Disconnect: failed to write to delete_controller. Error: %v", err)
 		return err
 	}
 	return nil
@@ -89,15 +88,15 @@ func disconnectSubsys(nqn, ctrl string) (res bool) {
 	sysfs_del_path := fmt.Sprintf("%s/%s/delete_controller", SYS_NVMF, ctrl)
 
 	file, err := os.Open(sysfs_nqn_path)
+	defer file.Close()
 	if err != nil {
-		klog.Errorf("Disconnect: open file %s err: %v", file.Name(), err)
+		klog.Errorf("Disconnect: failed to open file %s. Error: %v", file.Name(), err)
 		return false
 	}
-	defer file.Close()
 
 	lines, err := utils.ReadLinesFromFile(file)
 	if err != nil {
-		klog.Errorf("Disconnect: read file %s err: %v", file.Name(), err)
+		klog.Errorf("Disconnect: failed to read file %s. Error: %v", file.Name(), err)
 		return false
 	}
 
@@ -108,7 +107,7 @@ func disconnectSubsys(nqn, ctrl string) (res bool) {
 
 	err = _disconnect(sysfs_del_path)
 	if err != nil {
-		klog.Errorf("Disconnect: disconnect error: %s", err)
+		klog.Errorf("Disconnect: failed to disconnect nvmf. Error: %s", err)
 		return false
 	}
 
@@ -124,7 +123,7 @@ func disconnectByNqn(nqn string) int {
 
 	devices, err := ioutil.ReadDir(SYS_NVMF)
 	if err != nil {
-		klog.Errorf("Disconnect: readdir %s err: %s", SYS_NVMF, err)
+		klog.Errorf("Disconnect: failed to readdir %s. Error: %s", SYS_NVMF, err)
 		return -ENOENT
 	}
 
@@ -137,7 +136,7 @@ func disconnectByNqn(nqn string) int {
 }
 
 // connect to volume to this node and return devicePath
-func (c *Connector) Connect() (string, error) {
+func (c *nvmfConnector) Connect() (string, error) {
 	if c.RetryCount == 0 {
 		c.RetryCount = 10
 	}
@@ -146,26 +145,26 @@ func (c *Connector) Connect() (string, error) {
 	}
 
 	if c.RetryCount < 0 || c.CheckInterval < 0 {
-		return "", fmt.Errorf("Invalid RetryCount and CheckInterval combinaitons "+
-			"RetryCount: %d, CheckInterval: %d ", c.RetryCount, c.CheckInterval)
+		return "", fmt.Errorf("Invalid RetryCount and CheckInterval combinaitons. RetryCount: %d, CheckInterval: %d ", c.RetryCount, c.CheckInterval)
 	}
 
-	if strings.ToLower(c.Transport) != "tcp" && strings.ToLower(c.Transport) != "rdma" {
-		return "", fmt.Errorf("csi transport only support tcp/rdma ")
+	if strings.ToLower(c.TransportType) != "tcp" && strings.ToLower(c.TransportType) != "rdma" {
+		return "", fmt.Errorf("nvmf transport only support tcp/rdma ")
 	}
 
-	baseString := fmt.Sprintf("nqn=%s,transport=%s,traddr=%s,trsvcid=%s", c.TargetNqn, c.Transport, c.TargetAddr, c.TargetPort)
-	devicePath := strings.Join([]string{"/dev/disk/by-id/nvme-uuid", c.DeviceUUID}, ".")
+	nvmfConnectArgs := fmt.Sprintf("nqn=%s,transport=%s,traddr=%s,trsvcid=%s", c.TargetNqn, c.TransportType, c.TargetAddr, c.TargetPort)
 
-	// connect to nvmf disk
-	err := _connect(baseString)
+	// connect nvmf disk to Node
+	err := _connect(nvmfConnectArgs)
 	if err != nil {
 		return "", err
 	}
 	klog.Infof("Connect Volume %s success nqn: %s", c.VolumeID, c.TargetNqn)
+
+	devicePath := strings.Join([]string{SYS_DEV_NVMF_BASE_PATH, c.DeviceUUID}, ".")
 	retries := int(c.RetryCount / c.CheckInterval)
-	if exists, err := waitForPathToExist(devicePath, retries, int(c.CheckInterval), c.Transport); !exists {
-		klog.Errorf("connect nqn %s error %v, rollback!!!", c.TargetNqn, err)
+	if exists, err := waitFordevicePathToExist(devicePath, retries, int(c.CheckInterval), c.TransportType); !exists {
+		klog.Errorf("failed to connect nqn %s. Error %v, rollback to disconnect nvmf disk", c.TargetNqn, err)
 		ret := disconnectByNqn(c.TargetNqn)
 		if ret < 0 {
 			klog.Errorf("rollback error !!!")
@@ -173,25 +172,25 @@ func (c *Connector) Connect() (string, error) {
 		return "", err
 	}
 
-	klog.Infof("After connect we're returning devicePath: %s", devicePath)
+	klog.Infof("Connect nvmf disk to devicePath: %s", devicePath)
 	return devicePath, nil
 }
 
 // we disconnect only by nqn
-func (c *Connector) Disconnect() error {
+func (c *nvmfConnector) Disconnect() error {
 	ret := disconnectByNqn(c.TargetNqn)
 	if ret == 0 {
-		return fmt.Errorf("Disconnect: failed to disconnect by nqn: %s ", c.TargetNqn)
+		return fmt.Errorf("Disconnect: failed to disconnect by nqn. Error: %s ", c.TargetNqn)
 	}
 
 	return nil
 }
 
 // PersistConnector persists the provided Connector to the specified file (ie /var/lib/pfile/myConnector.json)
-func persistConnectorFile(c *Connector, filePath string) error {
+func persistConnectorFile(c *nvmfConnector, filePath string) error {
 	f, err := os.Create(filePath)
 	if err != nil {
-		return fmt.Errorf("error creating nvmf persistence file %s: %s", filePath, err)
+		return fmt.Errorf("failed to create nvmf persistence file %s. Error: %s", filePath, err)
 	}
 	defer f.Close()
 	encoder := json.NewEncoder(f)
@@ -212,16 +211,16 @@ func removeConnectorFile(targetPath string) {
 	}
 }
 
-func GetConnectorFromFile(filePath string) (*Connector, error) {
+func GetConnectorFromFile(filePath string) (*nvmfConnector, error) {
 	f, err := ioutil.ReadFile(filePath)
 	if err != nil {
-		return &Connector{}, err
+		return &nvmfConnector{}, err
 
 	}
-	data := Connector{}
+	data := nvmfConnector{}
 	err = json.Unmarshal([]byte(f), &data)
 	if err != nil {
-		return &Connector{}, err
+		return &nvmfConnector{}, err
 	}
 
 	return &data, nil
